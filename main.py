@@ -58,6 +58,23 @@ API_BASE = "https://api.telegram.org/bot"
 FILE_BASE = "https://api.telegram.org/file/bot"
 PRIMARY_INSTANCE = os.getenv("PRIMARY_INSTANCE", "true").strip().lower() in ("1", "true", "yes", "on")
 
+# ------------------- Keep-Alive (للاستضافة المجانية) -------------------
+RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "")  # ضع رابط الاستضافة هنا أو في متغير البيئة
+
+def _keep_alive_loop():
+    """يرسل طلب كل 10 دقائق لمنع إيقاف الاستضافة المجانية"""
+    while True:
+        try:
+            time.sleep(600)  # كل 10 دقائق
+            url = RENDER_URL or os.getenv("APP_URL", "")
+            if url:
+                requests.get(url, timeout=10)
+        except Exception:
+            pass
+
+threading.Thread(target=_keep_alive_loop, daemon=True).start()
+# -----------------------------------------------------------------------
+
 def api(method, data=None, files=None):
     r = requests.post(f"{API_BASE}{BOT_TOKEN}/{method}", data=data, files=files, timeout=60)
     return r.json()
@@ -1693,6 +1710,10 @@ class BotApp:
                 if sess.stop_ev.is_set():
                     return
                 em, pw = acc
+                # تأخير صغير لتخفيف الضغط على الاستضافة المجانية
+                free_hosting = os.getenv("FREE_HOSTING", "true").strip().lower() in ("1", "true", "yes")
+                if free_hosting:
+                    time.sleep(random.uniform(0.5, 1.5))
                 ms_domains = ('outlook.', 'hotmail.', 'live.', 'msn.', 'windowslive.')
                 is_ms = any(d in em for d in ms_domains)
                 if not is_ms:
@@ -1823,7 +1844,12 @@ class BotApp:
                             sess.ms_bads += 1
                 if sess.checked % 20 == 0:
                     self._send_status(sess, chat_id)
-            max_w = max(16, min(128, (os.cpu_count() or 4) * 8))
+            # على الاستضافة المجانية: نقلل الـ threads لتجنب إيقاف العملية
+            free_hosting = os.getenv("FREE_HOSTING", "true").strip().lower() in ("1", "true", "yes")
+            if free_hosting:
+                max_w = max(4, min(8, (os.cpu_count() or 2) * 2))
+            else:
+                max_w = max(16, min(128, (os.cpu_count() or 4) * 8))
             ex = ThreadPoolExecutor(max_workers=max_w)
             fs = [ex.submit(worker, acc) for acc in sub_accounts]
             try:
@@ -1873,6 +1899,10 @@ class BotApp:
                                 subs.append((em, pw))
                     if subs:
                         run_batch(subs)
+                        # تأخير بين كل 100 حساب لتخفيف الضغط على الاستضافة المجانية
+                        free_hosting = os.getenv("FREE_HOSTING", "true").strip().lower() in ("1", "true", "yes")
+                        if free_hosting and not sess.stop_ev.is_set():
+                            time.sleep(2)
                 finally:
                     try: os.remove(cp)
                     except: pass
